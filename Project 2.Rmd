@@ -1,0 +1,210 @@
+---
+title: "Project 2 - Tidying Three Datasets"
+author: "Georgia Galanopoulos"
+date: "March 12, 2017"
+output: html_document
+---
+Loading necessary libraries.
+```{r}
+library(knitr)
+library(stringr)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+```
+
+##Tidying Three Datasets
+The goal of this assignment is to choose three "wide" datasets from the Week 5 Discussion Board so as to tidy and transform them. The datasets used below are the ChronicDiseases, ChildMortality and Shipping datasets. For each dataset, a question will be asked, and attempted to be answered.
+
+### Chronic Diseases Dataset
+**What is the most prevalent disease in each state?**
+
+First, we read in the Chronic Diseases dataset.
+```{r}
+## Chronic Diseases Dataset
+CD = read.csv("ChronicDisease.csv", stringsAsFactors = T)
+dim(CD)
+head(CD)
+```
+After viewing the dataset and determining what factors would be most helpful to analysing the question, some columns were removed. Those columns were then renamed for clarity.
+```{r}
+# Remove columns we won't be using
+CD = CD[,c(1:6,10,13,18, 19)]
+# Change column names
+
+colnames(CD) = c( "Year0", "YearEnd", "StateAbbr", "State", "DataSource", "Topic", "DataType", "DataValue", "StratCategory", "Stratification")
+head(CD)
+```
+
+Some of the data in the Topic column is not uniformally spelled. We rename the data and then remove NA values in the DataValue column for easier computations.
+```{r}
+# Correct errors within data
+CD$Topic = str_replace_all(CD$Topic, "Cardiovascular disease", "Cardiovascular Disease")
+CD$Topic = str_replace_all(CD$Topic, "Chronic kidney disease", "Chronic Kidney Disease")
+
+# Removing NA values
+newCD = filter(CD, DataValue != "NA")
+head(newCD)
+```
+
+From here, we tidy the data by first adding a row_number indicator to bypass any issues with replicated rows. From there, we spread the StratCategory column so that Gender and Race/Ethnicity can each be a column.
+```{r}
+# Break Topic into several columns
+newCD =  group_by(newCD, row_number())
+newCD = spread(newCD, StratCategory, Stratification)
+kable(head(newCD))
+```
+
+For finding the most prevalent illnesses in each state, first we group the data by State and illness (Topic), summarize the mean and then retract from each state the Topic with the highest mean.
+```{r}
+# Finding the mean number of incidents for each Topic by State
+stats = data.frame(newCD %>% group_by(State, Topic) %>%
+          summarise(MeanState = round(mean(DataValue)),2))
+
+# Finding the most prevalent issue in each state
+kable(stats %>% group_by(State) %>% top_n(1, MeanState))
+```
+
+
+
+### Child Mortality Dataset
+**Have mortalities for children ages five and below increased or decreased in the past 60 years?**
+
+Read in the Child Mortality csv file and remove the data columns that does not include strictly children under the age of five.
+```{r}
+## Child Mortality Dataset
+CM = read.csv("ChildMortality.csv", skip = 6)
+CM = CM[,1:69]
+head(CM)
+```
+
+Because each year is a different column, here we combine all the years into one. Then, we spread the Uncertainty.bounds column into three (Lower, Median, Upper). Finally, we remove the NA values for easier computation. It should be noted that NA values show consistently across the rows meaning that if the Lower column has an NA value, so will the Median and Upper columns. This applies to the Median and Upper columns as well. Also, because the U5MR_Year data were previously columns, they do not show only the year. As such, we will remove the "U5MR" characters that precede the year.
+```{r}
+# Creating a column with all the data of Mortality Rates of children under the age of 5
+newCM = gather(CM, "U5MR_Year", "U5MR_Rate", 4:69)
+kable(head(newCM))
+
+# Breaking the Uncertainty.bounds column into Lower, Middle and Upper
+newCM = spread(newCM, "Uncertainty.bounds.", "U5MR_Rate")
+kable(head(newCM))
+
+# Removing NA values
+newCM = filter(newCM, Lower != "NA")
+kable(head(newCM))
+
+# Changing the Year data into only showing the year
+newCM$U5MR_Year = as.numeric(substr(newCM$U5MR_Year, 6, 10))
+kable(head(newCM))
+```
+
+Because the data is too large to view in table format, most conclusions we can draw about the increase or decrease of child mortality over the years are from plots. The data has been grouped first by country and then by year. The plot by year shows a steep decline in overall child mortality since the 1960s.
+```{r}
+# Grouped by Country
+newCM %>% group_by(ISO.Code) %>% 
+          summarise(MeanLower = round(mean(Lower),2),
+                    MeanMedian = round(mean(Median),2),
+                    MeanUpper = round(mean(Upper),2),
+                    OverallMean= round((MeanLower+ MeanMedian+ MeanUpper)/3,2),
+                    Counts = n())
+
+# Grouped by Year
+newCM %>% group_by(U5MR_Year) %>% 
+  summarise(MeanLower = round(mean(Lower),2),
+            MeanMedian = round(mean(Median),2),
+            MeanUpper = round(mean(Upper),2),
+            OverallMean= round((MeanLower+ MeanMedian+ MeanUpper)/3,2),
+            Counts = n())%>% 
+ggplot(aes(x= U5MR_Year, y=OverallMean , colour = OverallMean)) + 
+  geom_bar( aes(fill= OverallMean), stat="identity", position=position_dodge())
+
+```
+
+
+### Shipping Dataset
+**Which Country is being most cost effective with its shipping fees (is collecting more than the carrier price)?**
+
+Read the Shipping Countries Dataset into R.
+```{r}
+## Shipping Countries Dataset
+SC = read.csv("ShippingCountries.csv")
+head(SC)
+```
+
+In our attempt to make the Values column into two columns, we come across the issue of every second Date space being empty. To bypass this, we create a for loop that determines that if a Date row is empty, it will copy the date from the previous row onto it.
+```{r}
+# For loop to fill in empty Dates spaces
+for(i in 1:length(SC$Date)){
+  if(SC$Date[i]== ""){
+    SC$Date[i] = SC$Date[i-1]
+  } else {
+    SC$Date[i] = SC$Date[i]
+  }
+}
+kable(head(SC))
+```
+
+A column is created that will be a list of the countries. Then, because some of the numerical values are either blank or incorrectly entered characters, we will remove any non-numerical entries and fill both them and the empty ones with NA values. From there, we split the Values column into two columns (Price of Carrier and Shipping Fees) and then Break the Date column into Day, Month and Year columns. Furthermore, some spelling errors are corrected, such as renaming "Tawian" to "Taiwan" and removing the "." from "Hong.Kong". Finally, a new column called Difference is created which measures the difference between the Carrier Price and the Shipping Fees.
+```{r}
+# Making a Country column
+newSC = SC %>% gather("Country", "Fee", 3:10)
+kable(head(newSC))
+
+# Removing any non-numerical characters and replacing blank entries with NA
+newSC$Fee = as.numeric(as.character(newSC$Fee))
+kable(head(newSC))
+
+# Separating the Values column into two columns
+newSC = spread(newSC, "Values", "Fee")
+kable(head(newSC))
+
+# Breaking Date column in Day, Month and Year
+newSC = separate(newSC, Date, c("Month", "Day", "Year"), sep = "/")
+kable(head(newSC))
+
+# Removing the "." in Hong.Kong and correcting Tawian to Taiwan
+newSC$Country = str_replace_all(newSC$Country, "[.]", " ")
+newSC$Country = str_replace_all(newSC$Country, "Tawian", "Taiwan")
+kable(head(newSC))
+
+# Create difference column for Shipping Fees-Price
+newSC = mutate(newSC, Difference = (newSC[,6]-newSC[,5]))
+kable(head(newSC))
+```
+
+
+By grouping the data by country, and plotting the mean Carrier Prices, mean Shipping Fees and the mean Differences between those two values, we see that Canada has the most cost effective approach and China has the least. However, it should be noted that this could be due to the lack of data on the part of the other countries since China had 16 more useable data entries than Canada (visible in the Counts column in the table below).
+```{r}
+# Summary statistics
+shipstats =newSC %>% group_by(Country) %>% 
+           filter(Difference != "NA") %>% 
+           summarise(MeanPrice = round(mean(`Price of Carrier`),2),
+                     MeanShipping = round(mean(`Shipping Fees Collected`),2),
+                     MeanDiff = round(mean(Difference),2),
+                     PercentCollected = round((MeanShipping/MeanPrice)*100,2),
+                     Counts = n())
+kable(shipstats)
+```
+
+```{r}
+gather(shipstats, "Means", "n", 2:3 ) %>% 
+ggplot(aes(x= Means, y= n, colour = Means)) + 
+  geom_bar( aes(fill= Means), stat="identity", position=position_dodge())+
+  facet_grid(~ Country)
+
+
+barplot(shipstats$MeanDiff, names.arg =shipstats$Country,  xlab = "Country", ylab = "MeanDifference")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
